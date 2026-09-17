@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import queue
 import threading
-import webbrowser
 
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
@@ -23,7 +22,6 @@ from .engine import CATEGORIES, Engine, Store
 APP_TITLE = "XWipe"
 CHECK_ON = "☑"   # boite cochee
 CHECK_OFF = "☐"  # boite vide
-HELP_URL = "https://x.com/settings/your_twitter_data"
 
 
 class Worker(threading.Thread):
@@ -509,10 +507,12 @@ class ImportDialog(tk.Toplevel):
         ttk.Label(self, text="Importer un compte", style="H1.TLabel").pack(
             anchor="w", pady=(14, 2), **pad)
         ttk.Label(self, style="Muted.TLabel", justify="left", wraplength=520, text=(
-            "Colle ici tes cookies X. Trois formats marchent :\n"
-            "  - l'export JSON d'une extension de cookies (le plus simple),\n"
-            "  - l'en-tete Cookie copie depuis les outils de developpement (F12),\n"
-            "  - ou juste les deux valeurs auth_token et ct0 l'une sous l'autre.\n\n"
+            "Le plus simple, avec l'extension EditThisCookie :\n"
+            "  1. va sur x.com en etant connecte a ton compte,\n"
+            "  2. clique sur l'icone EditThisCookie, puis sur Exporter,\n"
+            "  3. colle tout ici en brut. XWipe trouve auth_token et ct0 tout seul.\n\n"
+            "Marchent aussi : l'en-tete Cookie copie depuis les outils F12, ou juste "
+            "les deux valeurs auth_token et ct0 l'une sous l'autre.\n\n"
             "Rien n'est envoye ailleurs : XWipe parle directement a x.com et garde "
             "les cookies chiffres sur cette machine.")).pack(anchor="w", **pad)
 
@@ -527,8 +527,6 @@ class ImportDialog(tk.Toplevel):
 
         row = ttk.Frame(self)
         row.pack(fill="x", pady=12, **pad)
-        ttk.Button(row, text="Comment recuperer mes cookies",
-                   command=lambda: webbrowser.open(HELP_URL)).pack(side="left")
         self.btn_ok = ttk.Button(row, text="Verifier et importer",
                                  style="Accent.TButton", command=self._import)
         self.btn_ok.pack(side="right")

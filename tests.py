@@ -5,6 +5,7 @@ casse est bien rejete, sinon un test peut etre vert sans rien prouver.
 
     python tests.py
 """
+import json
 import os
 import sys
 import tempfile
@@ -50,6 +51,23 @@ def test_import_formats():
 
     a, c = acct.parse_credentials('{"auth_token":"%s","ct0":"%s"}' % (AUTH, CT0))
     check("dict simple", (a, c) == (AUTH, CT0))
+
+    # Export brut EditThisCookie : tableau complet, champs supplementaires,
+    # cookies parasites. C'est le "clique Exporter, colle tout" du produit.
+    etc = json.dumps([
+        {"domain": ".x.com", "name": "guest_id", "value": "v1%3A123",
+         "path": "/", "secure": True, "httpOnly": False, "id": 1},
+        {"domain": ".x.com", "name": "__cf_bm", "value": "abcDEF_-123",
+         "path": "/", "secure": True, "httpOnly": True, "id": 2},
+        {"domain": ".x.com", "name": "auth_token", "value": AUTH,
+         "path": "/", "secure": True, "httpOnly": True, "expirationDate": 1.0, "id": 3},
+        {"domain": ".x.com", "name": "ct0", "value": CT0,
+         "path": "/", "secure": True, "httpOnly": False, "id": 4},
+        {"domain": "x.com", "name": "lang", "value": "fr", "id": 5},
+    ])
+    a, c = acct.parse_credentials(etc)
+    check("export brut EditThisCookie (tableau complet + parasites)",
+          (a, c) == (AUTH, CT0))
 
     # temoins : ces entrees DOIVENT echouer
     for bad, why in [("", "vide"),
