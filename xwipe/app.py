@@ -109,6 +109,8 @@ class App(tk.Tk):
         self.checked: set[str] = set()
         self.row_by_iid: dict[str, dict] = {}
         self.current: dict | None = None
+        self._gen = 0                # generation, pour annuler un remplissage en cours
+        self._pending: list[dict] = []  # lignes filtrees a inserer par lots
 
         self._build_style()
         self._build_layout()
@@ -234,6 +236,12 @@ class App(tk.Tk):
         ttk.Button(filt, text="Tout cocher (vue)", style="Ghost.TButton",
                    command=self._check_all).pack(side="right", padx=SP["xs"])
 
+        # -- Recap par categorie : reconnaissance d'un coup d'oeil ------------
+        brk = ttk.Frame(self, padding=(SP["xl"], 0, SP["xl"], SP["sm"]))
+        brk.pack(fill="x")
+        self.breakdown = ttk.Label(brk, text="", style="Muted.TLabel")
+        self.breakdown.pack(side="left")
+
         # -- Table : surface enfoncee, bordure hairline, etat vide ------------
         mid = ttk.Frame(self, padding=(SP["xl"], 0, SP["xl"], 0))
         mid.pack(fill="both", expand=True)
@@ -248,7 +256,7 @@ class App(tk.Tk):
         for c, txt, w, anchor, stretch in (
                 ("check", "", 40, "center", False), ("kind", "TYPE", 96, "w", False),
                 ("date", "DATE", 150, "w", False), ("text", "CONTENU", 560, "w", True),
-                ("likes", "LIKES", 70, "e", False)):
+                ("likes", "♥", 58, "e", False)):  # metrique, distinct du type "Like"
             self.tree.heading(c, text=txt)
             self.tree.column(c, width=w, anchor=anchor, stretch=stretch)
         self.tree.tag_configure("on", background=C["sel"], foreground=C["text"])
@@ -434,33 +442,66 @@ class App(tk.Tk):
         else:
             self.empty.place_forget()
 
+    KINDS = {"tweet": "Tweet", "reply": "Reponse", "retweet": "Retweet",
+             "like": "Like"}
+
+    def _update_breakdown(self):
+        if not self.records:
+            self.breakdown.configure(text="")
+            return
+        c = {"tweet": 0, "reply": 0, "retweet": 0, "like": 0}
+        for r in self.records:
+            c[r["kind"]] = c.get(r["kind"], 0) + 1
+        self.breakdown.configure(
+            text="%d tweets   ·   %d reponses   ·   %d retweets   ·   %d likes"
+            % (c["tweet"], c["reply"], c["retweet"], c["like"]))
+
     def _repopulate(self):
+        # Insertion par lots : un compte peut avoir des milliers de likes, tout
+        # inserer d'un coup gelerait l'interface. Une generation annule un
+        # remplissage encore en cours si un filtre change entre-temps.
+        self._gen += 1
+        gen = self._gen
         self.tree.delete(*self.tree.get_children())
         self.row_by_iid.clear()
-        shown = 0
-        for rec in self.records:
-            if not self.cat_vars.get(rec["kind"], tk.BooleanVar(value=True)).get():
-                continue
+        default_on = tk.BooleanVar(value=True)
+        self._pending = [r for r in self.records
+                         if self.cat_vars.get(r["kind"], default_on).get()]
+        self._update_breakdown()
+        if not self._pending:
+            self._update_counts(0)
+            return
+        self._insert_batch(gen, 0)
+
+    def _insert_batch(self, gen: int, start: int):
+        if gen != self._gen:
+            return
+        for rec in self._pending[start:start + 400]:
             on = rec["id"] in self.checked
-            kind = {"tweet": "Tweet", "reply": "Reponse", "retweet": "Retweet",
-                    "like": "Like"}.get(rec["kind"], rec["kind"])
-            date = (rec.get("created_at") or "")[:16]
             text = (rec.get("text") or "").replace("\n", " ")
             if len(text) > 120:
                 text = text[:117] + "..."
             iid = self.tree.insert(
                 "", "end", tags=("on" if on else "off",),
-                values=(CHECK_ON if on else CHECK_OFF, kind, date, text,
+                values=(CHECK_ON if on else CHECK_OFF,
+                        self.KINDS.get(rec["kind"], rec["kind"]),
+                        (rec.get("created_at") or "")[:16], text,
                         rec.get("likes") or 0))
             self.row_by_iid[iid] = rec
-            shown += 1
-        self._update_counts(shown)
+        done = min(start + 400, len(self._pending))
+        if done < len(self._pending):
+            self._update_counts(done, partial=True)
+            self.after(1, lambda: self._insert_batch(gen, done))
+        else:
+            self._update_counts(done)
 
-    def _update_counts(self, shown: int):
+    def _update_counts(self, shown: int, partial: bool = False):
         total = len(self.records)
         self.count_lbl.configure(
-            text="%d affiches / %d  |  %d selectionnes" % (shown, total, len(self.checked)))
-        self._show_empty(shown == 0, filtered=(total > 0 and shown == 0))
+            text="%d affiches / %d  |  %d selectionnes%s"
+            % (shown, total, len(self.checked), "  ..." if partial else ""))
+        if not partial:
+            self._show_empty(shown == 0, filtered=(total > 0 and shown == 0))
         self._sync_delete_button()
 
     def _sync_delete_button(self):
@@ -496,19 +537,24 @@ class App(tk.Tk):
         self._update_counts(len(self.tree.get_children()))
         return "break"
 
-    def _check_all(self):
+    def _bulk_check(self, on: bool):
+        # Agit sur toute la vue filtree (_pending), pas seulement les lignes deja
+        # inserees : les lignes restantes liront `checked` a leur insertion.
+        for rec in self._pending:
+            if on:
+                self.checked.add(rec["id"])
+            else:
+                self.checked.discard(rec["id"])
         for iid in self.tree.get_children():
-            rec = self.row_by_iid.get(iid)
-            if rec:
-                self._set_row(iid, rec, True)
-        self._update_counts(len(self.tree.get_children()))
+            self.tree.set(iid, "check", CHECK_ON if on else CHECK_OFF)
+            self.tree.item(iid, tags=("on" if on else "off",))
+        self._update_counts(len(self._pending))
+
+    def _check_all(self):
+        self._bulk_check(True)
 
     def _check_none(self):
-        for iid in self.tree.get_children():
-            rec = self.row_by_iid.get(iid)
-            if rec:
-                self._set_row(iid, rec, False)
-        self._update_counts(len(self.tree.get_children()))
+        self._bulk_check(False)
 
     # ------------------------------------------------------------ actions
 
