@@ -79,3 +79,9 @@ The result is `dist/XWipe.exe`.
 - `ACCOUNT_ENV=<path to .env> python it_readonly.py` runs a live, read-only
   integration test against a real account. The destructive methods are trapped,
   so it cannot remove anything.
+
+## License
+
+XWipe is proprietary, commercial software. It is not open source and not free to
+use. A valid paid license is required. See [LICENSE](LICENSE) for the terms, and
+contact the copyright holder for licensing.
