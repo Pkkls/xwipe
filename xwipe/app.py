@@ -6,11 +6,16 @@ widget depuis un autre thread.
 
 Flux : importer un compte (coller les cookies) -> lire le compte -> cocher ce
 qu'on veut retirer -> confirmer -> suppression puis verification.
+
+Design : palette verifiee AA (contrast.py du kit UX), un seul accent, un seul
+danger, une echelle d'espacement. Surfaces par profondeur (page < table/journal),
+separations a la hairline plutot qu'au trait colore.
 """
 from __future__ import annotations
 
 import queue
 import threading
+import time
 
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
@@ -20,8 +25,40 @@ from .api import AuthError, XClient, XError
 from .engine import CATEGORIES, Engine, Store
 
 APP_TITLE = "XWipe"
-CHECK_ON = "☑"   # boite cochee
-CHECK_OFF = "☐"  # boite vide
+CHECK_ON = "☑"   # case cochee (symbole geometrique, pas un emoji)
+CHECK_OFF = "☐"  # case vide
+
+# --- systeme de design -------------------------------------------------------
+# Contrastes verifies avec le contrast.py du kit UX : texte 16/9.3/5.2:1,
+# blanc sur accent 5.85:1, blanc sur danger 4.61:1. Un accent, un danger.
+C = {
+    "page":    "#0e1116",  # fond, off-black legerement froid
+    "raised":  "#161b22",  # entetes de zone
+    "sunken":  "#0a0d11",  # table, champs, journal
+    "line":    "#232a33",  # hairline
+    "line2":   "#2c3742",  # hairline plus marquee (bordures de champ)
+    "text":    "#e6edf3",  # 16:1
+    "text2":   "#adb7c2",  # 9.3:1
+    "muted":   "#7d8792",  # 5.2:1 (AA)
+    "accent":  "#1a5fd0",  # bouton primaire (blanc dessus = 5.85:1)
+    "accentH": "#2f6fe0",  # accent survol
+    "accentT": "#4c9aff",  # accent en texte / selection (6.6:1)
+    "danger":  "#da3633",  # blanc dessus = 4.61:1
+    "dangerH": "#e5484d",
+    "ok":      "#3fb950",
+    "warn":    "#d29922",
+    "on":      "#ffffff",
+    "sel":     "#132133",  # fond d'une ligne cochee (teinte accent, discrete)
+    "cursor":  "#1b2b40",  # fond de la ligne au clavier (curseur browse)
+    "ghost":   "#1c232c",  # bouton neutre
+    "ghostH":  "#252e39",
+    "off":     "#2a323c",  # etat desactive
+    "offtext": "#5b636d",
+}
+SP = {"xs": 4, "sm": 8, "md": 12, "lg": 16, "xl": 22, "xxl": 30}
+FF = "Segoe UI"
+FF_SEMI = "Segoe UI Semibold"
+FF_MONO = "Consolas"
 
 
 class Worker(threading.Thread):
@@ -52,12 +89,19 @@ class Worker(threading.Thread):
             self._q.put(("done", None))
 
 
+def _hr(parent, color=C["line"]):
+    """Separateur hairline horizontal, plus discret qu'un trait colore."""
+    f = tk.Frame(parent, height=1, bg=color)
+    f.pack(fill="x")
+    return f
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("1024x680")
-        self.minsize(860, 560)
+        self.geometry("1080x720")
+        self.minsize(920, 600)
 
         self.q: queue.Queue = queue.Queue()
         self.worker: Worker | None = None
@@ -75,122 +119,203 @@ class App(tk.Tk):
     # ------------------------------------------------------------------ style
 
     def _build_style(self):
-        self.configure(bg="#0f1115")
+        self.configure(bg=C["page"])
         s = ttk.Style(self)
         try:
             s.theme_use("clam")
         except tk.TclError:
             pass
-        bg, fg, acc = "#0f1115", "#e6e8eb", "#1d9bf0"
-        s.configure(".", background=bg, foreground=fg, fieldbackground="#1a1d24")
-        s.configure("TFrame", background=bg)
-        s.configure("TLabel", background=bg, foreground=fg)
-        s.configure("Muted.TLabel", foreground="#8b929c")
-        s.configure("H1.TLabel", font=("Segoe UI Semibold", 15))
-        s.configure("TButton", padding=6)
-        s.configure("Accent.TButton", foreground="#ffffff")
-        s.map("Accent.TButton",
-              background=[("!disabled", acc), ("disabled", "#2a2d34")])
-        s.configure("Danger.TButton", foreground="#ffffff")
-        s.map("Danger.TButton",
-              background=[("!disabled", "#c8102e"), ("disabled", "#2a2d34")])
-        s.configure("Treeview", background="#12151b", fieldbackground="#12151b",
-                    foreground=fg, rowheight=24, borderwidth=0)
-        s.configure("Treeview.Heading", background="#1a1d24", foreground="#c7ccd3",
-                    relief="flat")
-        s.map("Treeview", background=[("selected", "#1d2733")])
+
+        s.configure(".", background=C["page"], foreground=C["text"],
+                    fieldbackground=C["sunken"], bordercolor=C["line"],
+                    focuscolor=C["accentT"], font=(FF, 10))
+        s.configure("TFrame", background=C["page"])
+        s.configure("TLabel", background=C["page"], foreground=C["text"])
+        s.configure("Sub.TLabel", foreground=C["text2"])
+        s.configure("Muted.TLabel", foreground=C["muted"])
+        s.configure("Title.TLabel", foreground=C["text"], font=(FF_SEMI, 19))
+        s.configure("Eyebrow.TLabel", foreground=C["muted"], font=(FF, 9))
+        s.configure("Count.TLabel", foreground=C["text2"], font=(FF_MONO, 9))
+        s.configure("H1.TLabel", foreground=C["text"], font=(FF_SEMI, 15))
+
+        # Boutons : trois roles seulement.
+        for name, bg, bgh, fg in (
+                ("Accent", C["accent"], C["accentH"], C["on"]),
+                ("Danger", C["danger"], C["dangerH"], C["on"]),
+                ("Ghost",  C["ghost"],  C["ghostH"],  C["text2"])):
+            s.configure("%s.TButton" % name, background=bg, foreground=fg,
+                        borderwidth=0, relief="flat", padding=(14, 8),
+                        font=(FF, 10))
+            s.map("%s.TButton" % name,
+                  background=[("disabled", C["off"]), ("pressed", bg),
+                              ("active", bgh)],
+                  foreground=[("disabled", C["offtext"])])
+        s.configure("Ghost.TButton", bordercolor=C["line2"], borderwidth=1)
+        # Bouton primaire un cran plus grand pour asseoir la hierarchie.
+        s.configure("Accent.TButton", padding=(18, 9), font=(FF_SEMI, 10))
+        s.configure("Danger.TButton", padding=(16, 9), font=(FF_SEMI, 10))
+
+        s.configure("TCombobox", fieldbackground=C["sunken"], background=C["ghost"],
+                    foreground=C["text"], arrowcolor=C["text2"],
+                    bordercolor=C["line2"], borderwidth=1, padding=(10, 7))
+        s.map("TCombobox", fieldbackground=[("readonly", C["sunken"])],
+              foreground=[("disabled", C["offtext"])],
+              arrowcolor=[("disabled", C["off"])])
+
+        s.configure("TCheckbutton", background=C["page"], foreground=C["text2"],
+                    focuscolor=C["accentT"])
+        s.map("TCheckbutton", foreground=[("active", C["text"])],
+              indicatorcolor=[("selected", C["accentT"]), ("!selected", C["sunken"])])
+
+        s.configure("Treeview", background=C["sunken"], fieldbackground=C["sunken"],
+                    foreground=C["text2"], rowheight=30, borderwidth=0,
+                    font=(FF, 10))
+        s.configure("Treeview.Heading", background=C["raised"], foreground=C["muted"],
+                    relief="flat", font=(FF, 9), padding=(8, 6))
+        s.map("Treeview.Heading", background=[("active", C["raised"])])
+        s.map("Treeview", background=[("selected", C["cursor"])],
+              foreground=[("selected", C["text"])])
+
+        s.configure("TProgressbar", troughcolor=C["sunken"], background=C["accentT"],
+                    borderwidth=0, thickness=4)
+        s.configure("Vertical.TScrollbar", background=C["ghost"],
+                    troughcolor=C["page"], bordercolor=C["page"],
+                    arrowcolor=C["muted"])
 
     # ----------------------------------------------------------------- layout
 
     def _build_layout(self):
-        top = ttk.Frame(self, padding=(14, 12))
-        top.pack(fill="x")
-        ttk.Label(top, text="XWipe", style="H1.TLabel").pack(side="left")
-        ttk.Label(top, text="  supprime tes tweets, reponses et retweets",
-                  style="Muted.TLabel").pack(side="left")
+        # -- Entete : identite du produit, une phrase concrete ----------------
+        head = ttk.Frame(self, padding=(SP["xl"], SP["lg"], SP["xl"], SP["md"]))
+        head.pack(fill="x")
+        ttk.Label(head, text="XWipe", style="Title.TLabel").pack(side="left")
+        ttk.Label(head, text="  supprime tes tweets, reponses et retweets sur X",
+                  style="Muted.TLabel").pack(side="left", pady=(6, 0))
 
-        bar = ttk.Frame(self, padding=(14, 0))
-        bar.pack(fill="x")
-        ttk.Label(bar, text="Compte :").pack(side="left")
+        # -- Barre compte : la 1re etape, action primaire a droite ------------
+        acct_bar = ttk.Frame(self, padding=(SP["xl"], 0, SP["xl"], SP["md"]))
+        acct_bar.pack(fill="x")
+        ttk.Label(acct_bar, text="COMPTE", style="Eyebrow.TLabel").pack(
+            side="left", padx=(0, SP["sm"]), pady=(4, 0))
         self.account_var = tk.StringVar()
-        self.account_menu = ttk.Combobox(bar, textvariable=self.account_var,
-                                         state="readonly", width=34)
-        self.account_menu.pack(side="left", padx=6)
+        self.account_menu = ttk.Combobox(acct_bar, textvariable=self.account_var,
+                                         state="readonly", width=30)
+        self.account_menu.pack(side="left")
         self.account_menu.bind("<<ComboboxSelected>>", lambda _e: self._on_pick_account())
-        ttk.Button(bar, text="Importer un compte",
-                   command=self._open_import).pack(side="left", padx=4)
-        self.btn_remove = ttk.Button(bar, text="Retirer", command=self._remove_account)
-        self.btn_remove.pack(side="left")
-        self.btn_purge = ttk.Button(bar, text="Effacer sauvegardes locales",
-                                    command=self._purge_local)
-        self.btn_purge.pack(side="left", padx=4)
-        self.btn_scan = ttk.Button(bar, text="Lire le compte", style="Accent.TButton",
-                                   command=self._scan)
+        ttk.Button(acct_bar, text="+  Importer", style="Ghost.TButton",
+                   command=self._open_import).pack(side="left", padx=(SP["sm"], SP["xs"]))
+        self.btn_remove = ttk.Button(acct_bar, text="Retirer", style="Ghost.TButton",
+                                     command=self._remove_account)
+        self.btn_remove.pack(side="left", padx=SP["xs"])
+        self.btn_purge = ttk.Button(acct_bar, text="Effacer sauvegardes",
+                                    style="Ghost.TButton", command=self._purge_local)
+        self.btn_purge.pack(side="left", padx=SP["xs"])
+        self.btn_scan = ttk.Button(acct_bar, text="⟳  Lire le compte",
+                                   style="Accent.TButton", command=self._scan)
         self.btn_scan.pack(side="right")
 
-        filt = ttk.Frame(self, padding=(14, 8))
+        _hr(self)
+
+        # -- Barre de tri/selection : filtres + tout cocher + compteur --------
+        filt = ttk.Frame(self, padding=(SP["xl"], SP["md"], SP["xl"], SP["md"]))
         filt.pack(fill="x")
+        ttk.Label(filt, text="AFFICHER", style="Eyebrow.TLabel").pack(
+            side="left", padx=(0, SP["sm"]))
         self.cat_vars: dict[str, tk.BooleanVar] = {}
-        ttk.Label(filt, text="Afficher :").pack(side="left")
         for kind, label in CATEGORIES:
             v = tk.BooleanVar(value=True)
             self.cat_vars[kind] = v
             ttk.Checkbutton(filt, text=label, variable=v,
-                            command=self._repopulate).pack(side="left", padx=4)
-        ttk.Button(filt, text="Tout cocher (vue)",
-                   command=self._check_all).pack(side="left", padx=(16, 2))
-        ttk.Button(filt, text="Tout decocher",
-                   command=self._check_none).pack(side="left")
-        self.count_lbl = ttk.Label(filt, text="", style="Muted.TLabel")
+                            command=self._repopulate).pack(side="left", padx=(0, SP["md"]))
+        self.count_lbl = ttk.Label(filt, text="", style="Count.TLabel")
         self.count_lbl.pack(side="right")
+        ttk.Button(filt, text="Tout decocher", style="Ghost.TButton",
+                   command=self._check_none).pack(side="right", padx=(SP["sm"], SP["lg"]))
+        ttk.Button(filt, text="Tout cocher (vue)", style="Ghost.TButton",
+                   command=self._check_all).pack(side="right", padx=SP["xs"])
 
-        mid = ttk.Frame(self, padding=(14, 0))
+        # -- Table : surface enfoncee, bordure hairline, etat vide ------------
+        mid = ttk.Frame(self, padding=(SP["xl"], 0, SP["xl"], 0))
         mid.pack(fill="both", expand=True)
+        border = tk.Frame(mid, bg=C["line"])            # fausse bordure 1px
+        border.pack(fill="both", expand=True)
+        holder = tk.Frame(border, bg=C["sunken"])
+        holder.pack(fill="both", expand=True, padx=1, pady=1)
+
         cols = ("check", "kind", "date", "text", "likes")
-        self.tree = ttk.Treeview(mid, columns=cols, show="headings", selectmode="none")
-        for c, txt, w, anchor in (
-                ("check", "", 34, "center"), ("kind", "Type", 90, "w"),
-                ("date", "Date", 150, "w"), ("text", "Contenu", 560, "w"),
-                ("likes", "Likes", 60, "e")):
+        self.tree = ttk.Treeview(holder, columns=cols, show="headings",
+                                 selectmode="browse")
+        for c, txt, w, anchor, stretch in (
+                ("check", "", 40, "center", False), ("kind", "TYPE", 96, "w", False),
+                ("date", "DATE", 150, "w", False), ("text", "CONTENU", 560, "w", True),
+                ("likes", "LIKES", 70, "e", False)):
             self.tree.heading(c, text=txt)
-            self.tree.column(c, width=w, anchor=anchor,
-                             stretch=(c == "text"))
-        vs = ttk.Scrollbar(mid, orient="vertical", command=self.tree.yview)
+            self.tree.column(c, width=w, anchor=anchor, stretch=stretch)
+        self.tree.tag_configure("on", background=C["sel"], foreground=C["text"])
+        self.tree.tag_configure("off", background=C["sunken"])
+        vs = ttk.Scrollbar(holder, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vs.set)
         self.tree.pack(side="left", fill="both", expand=True)
         vs.pack(side="right", fill="y")
         self.tree.bind("<Button-1>", self._on_tree_click)
+        self.tree.bind("<space>", self._toggle_focus_row)
+        self.tree.bind("<Return>", self._toggle_focus_row)
 
-        bottom = ttk.Frame(self, padding=(14, 10))
-        bottom.pack(fill="x")
-        self.progress = ttk.Progressbar(bottom, mode="determinate")
-        self.progress.pack(fill="x", side="top")
-        row = ttk.Frame(bottom)
-        row.pack(fill="x", pady=(8, 0))
+        # Etat vide, pose par-dessus la table quand il n'y a rien a montrer.
+        self.empty = tk.Frame(holder, bg=C["sunken"])
+        self.empty_glyph = tk.Label(self.empty, text=CHECK_OFF, bg=C["sunken"],
+                                    fg=C["line2"], font=(FF, 40))
+        self.empty_glyph.pack()
+        self.empty_title = tk.Label(self.empty, bg=C["sunken"], fg=C["text2"],
+                                    font=(FF_SEMI, 13))
+        self.empty_title.pack(pady=(SP["md"], SP["xs"]))
+        self.empty_sub = tk.Label(self.empty, bg=C["sunken"], fg=C["muted"],
+                                  font=(FF, 10), justify="center")
+        self.empty_sub.pack()
+
+        # -- Pied : progression + statut a gauche, actions a droite -----------
+        _hr(self)
+        foot = ttk.Frame(self, padding=(SP["xl"], SP["md"], SP["xl"], SP["md"]))
+        foot.pack(fill="x")
+        self.progress = ttk.Progressbar(foot, mode="determinate")
+        self.progress.pack(fill="x", side="top", pady=(0, SP["md"]))
+        row = ttk.Frame(foot)
+        row.pack(fill="x")
         self.status = ttk.Label(row, text="Importe un compte pour commencer.",
-                                style="Muted.TLabel")
+                                style="Sub.TLabel")
         self.status.pack(side="left")
-        self.btn_cancel = ttk.Button(row, text="Arreter", command=self._cancel,
-                                     state="disabled")
-        self.btn_cancel.pack(side="right")
         self.btn_delete = ttk.Button(row, text="Supprimer la selection",
                                      style="Danger.TButton", command=self._delete,
                                      state="disabled")
-        self.btn_delete.pack(side="right", padx=6)
+        self.btn_delete.pack(side="right")
+        self.btn_cancel = ttk.Button(row, text="Arreter", style="Ghost.TButton",
+                                     command=self._cancel, state="disabled")
+        self.btn_cancel.pack(side="right", padx=(0, SP["sm"]))
 
-        self.logbox = scrolledtext.ScrolledText(self, height=7, bg="#0b0d11",
-                                                fg="#c7ccd3", insertbackground="#c7ccd3",
-                                                relief="flat", font=("Consolas", 9))
-        self.logbox.pack(fill="x", padx=14, pady=(0, 12))
+        # -- Journal d'activite : panneau discret, pas un terminal brut -------
+        logwrap = ttk.Frame(self, padding=(SP["xl"], 0, SP["xl"], SP["lg"]))
+        logwrap.pack(fill="x")
+        ttk.Label(logwrap, text="ACTIVITE", style="Eyebrow.TLabel").pack(
+            anchor="w", pady=(0, SP["xs"]))
+        self.logbox = scrolledtext.ScrolledText(
+            logwrap, height=6, bg=C["sunken"], fg=C["text2"],
+            insertbackground=C["text2"], relief="flat", highlightthickness=1,
+            highlightbackground=C["line"], highlightcolor=C["line"],
+            font=(FF_MONO, 9), padx=SP["md"], pady=SP["sm"], wrap="word")
+        self.logbox.pack(fill="x")
         self.logbox.configure(state="disabled")
-        for tag, col in (("ok", "#3fb950"), ("warn", "#d29922"),
-                         ("error", "#f85149"), ("info", "#8b929c")):
+        self.logbox.tag_config("ts", foreground=C["muted"])
+        for tag, col in (("ok", C["ok"]), ("warn", C["warn"]),
+                         ("error", C["danger"]), ("info", C["text2"])):
             self.logbox.tag_config(tag, foreground=col)
+
+        self._show_empty(True)
 
     # -------------------------------------------------------------- log / busy
 
     def log(self, msg: str, level: str = "info"):
         self.logbox.configure(state="normal")
+        self.logbox.insert("end", time.strftime("%H:%M:%S "), "ts")
         self.logbox.insert("end", msg + "\n", level)
         self.logbox.see("end")
         self.logbox.configure(state="disabled")
@@ -217,6 +342,7 @@ class App(tk.Tk):
         elif not self.accounts:
             self.account_var.set("")
             self.current = None
+            self._repopulate()
 
     def _on_pick_account(self):
         i = self.account_menu.current()
@@ -287,6 +413,27 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------ tableau
 
+    def _show_empty(self, show: bool, filtered: bool = False):
+        if show:
+            if filtered:
+                self.empty_glyph.configure(text="☷")
+                self.empty_title.configure(text="Rien pour ce filtre")
+                self.empty_sub.configure(
+                    text="Coche un type dans AFFICHER pour voir plus d'elements.")
+            elif self.current:
+                self.empty_glyph.configure(text="⟳")
+                self.empty_title.configure(text="Compte pret a lire")
+                self.empty_sub.configure(
+                    text="Clique Lire le compte pour charger tweets, reponses et retweets.")
+            else:
+                self.empty_glyph.configure(text=CHECK_OFF)
+                self.empty_title.configure(text="Aucun compte")
+                self.empty_sub.configure(
+                    text="Clique Importer et colle tes cookies pour commencer.")
+            self.empty.place(relx=0.5, rely=0.5, anchor="center")
+        else:
+            self.empty.place_forget()
+
     def _repopulate(self):
         self.tree.delete(*self.tree.get_children())
         self.row_by_iid.clear()
@@ -294,61 +441,73 @@ class App(tk.Tk):
         for rec in self.records:
             if not self.cat_vars.get(rec["kind"], tk.BooleanVar(value=True)).get():
                 continue
-            mark = CHECK_ON if rec["id"] in self.checked else CHECK_OFF
+            on = rec["id"] in self.checked
             kind = {"tweet": "Tweet", "reply": "Reponse",
                     "retweet": "Retweet"}.get(rec["kind"], rec["kind"])
             date = (rec.get("created_at") or "")[:16]
             text = (rec.get("text") or "").replace("\n", " ")
             if len(text) > 120:
                 text = text[:117] + "..."
-            iid = self.tree.insert("", "end",
-                                   values=(mark, kind, date, text, rec.get("likes") or 0))
+            iid = self.tree.insert(
+                "", "end", tags=("on" if on else "off",),
+                values=(CHECK_ON if on else CHECK_OFF, kind, date, text,
+                        rec.get("likes") or 0))
             self.row_by_iid[iid] = rec
             shown += 1
         self._update_counts(shown)
 
     def _update_counts(self, shown: int):
+        total = len(self.records)
         self.count_lbl.configure(
-            text="%d affiche(s) sur %d  |  %d selectionne(s)"
-            % (shown, len(self.records), len(self.checked)))
+            text="%d affiches / %d  |  %d selectionnes" % (shown, total, len(self.checked)))
+        self._show_empty(shown == 0, filtered=(total > 0 and shown == 0))
         self._sync_delete_button()
 
     def _sync_delete_button(self):
-        can = bool(self.checked) and self.worker is None
-        self.btn_delete.configure(state="normal" if can else "disabled")
+        n = len(self.checked)
+        self.btn_delete.configure(
+            text=("Supprimer la selection (%d)" % n) if n else "Supprimer la selection",
+            state="normal" if (n and self.worker is None) else "disabled")
+
+    def _set_row(self, iid: str, rec: dict, on: bool):
+        if on:
+            self.checked.add(rec["id"])
+        else:
+            self.checked.discard(rec["id"])
+        self.tree.set(iid, "check", CHECK_ON if on else CHECK_OFF)
+        self.tree.item(iid, tags=("on" if on else "off",))
 
     def _on_tree_click(self, event):
         if self.tree.identify_region(event.x, event.y) != "cell":
             return
         iid = self.tree.identify_row(event.y)
-        if not iid:
-            return
-        col = self.tree.identify_column(event.x)
         rec = self.row_by_iid.get(iid)
         if not rec:
             return
-        # Clic sur la case OU sur la ligne : les deux basculent, plus tolerant.
-        if rec["id"] in self.checked:
-            self.checked.discard(rec["id"])
-            self.tree.set(iid, "check", CHECK_OFF)
-        else:
-            self.checked.add(rec["id"])
-            self.tree.set(iid, "check", CHECK_ON)
+        self._set_row(iid, rec, rec["id"] not in self.checked)
         self._update_counts(len(self.tree.get_children()))
+
+    def _toggle_focus_row(self, _event=None):
+        iid = self.tree.focus()
+        rec = self.row_by_iid.get(iid)
+        if not rec:
+            return "break"
+        self._set_row(iid, rec, rec["id"] not in self.checked)
+        self._update_counts(len(self.tree.get_children()))
+        return "break"
 
     def _check_all(self):
         for iid in self.tree.get_children():
             rec = self.row_by_iid.get(iid)
             if rec:
-                self.checked.add(rec["id"])
-                self.tree.set(iid, "check", CHECK_ON)
+                self._set_row(iid, rec, True)
         self._update_counts(len(self.tree.get_children()))
 
     def _check_none(self):
         for iid in self.tree.get_children():
-            self.tree.set(iid, "check", CHECK_OFF)
-        for rec in list(self.row_by_iid.values()):
-            self.checked.discard(rec["id"])
+            rec = self.row_by_iid.get(iid)
+            if rec:
+                self._set_row(iid, rec, False)
         self._update_counts(len(self.tree.get_children()))
 
     # ------------------------------------------------------------ actions
@@ -493,8 +652,9 @@ class ImportDialog(tk.Toplevel):
         self.master_app = master
         self.on_done = on_done
         self.title("Importer un compte")
-        self.configure(bg="#0f1115")
-        self.geometry("560x520")
+        self.configure(bg=C["page"])
+        self.geometry("580x560")
+        self.minsize(520, 500)
         self.transient(master)
         self.grab_set()
         self.q: queue.Queue = queue.Queue()
@@ -503,44 +663,57 @@ class ImportDialog(tk.Toplevel):
         self.after(80, self._pump)
 
     def _build(self):
-        pad = {"padx": 16}
-        ttk.Label(self, text="Importer un compte", style="H1.TLabel").pack(
-            anchor="w", pady=(14, 2), **pad)
+        pad = {"padx": SP["xl"]}
+        ttk.Label(self, text="Importer un compte", style="Title.TLabel").pack(
+            anchor="w", pady=(SP["xl"], SP["xs"]), **pad)
+        ttk.Label(self, text="Le plus simple, avec l'extension EditThisCookie",
+                  style="Sub.TLabel").pack(anchor="w", **pad)
+        steps = tk.Frame(self, bg=C["page"])
+        steps.pack(anchor="w", fill="x", pady=(SP["sm"], SP["md"]), **pad)
+        for n, t in enumerate((
+                "va sur x.com en etant connecte a ton compte,",
+                "clique l'icone EditThisCookie, puis Exporter,",
+                "colle tout ici en brut. XWipe trouve auth_token et ct0."), 1):
+            line = tk.Frame(steps, bg=C["page"])
+            line.pack(anchor="w", fill="x", pady=1)
+            tk.Label(line, text=str(n), bg=C["accent"], fg=C["on"], width=2,
+                     font=(FF_SEMI, 9)).pack(side="left", padx=(0, SP["sm"]))
+            tk.Label(line, text=t, bg=C["page"], fg=C["text2"],
+                     font=(FF, 10), anchor="w").pack(side="left")
         ttk.Label(self, style="Muted.TLabel", justify="left", wraplength=520, text=(
-            "Le plus simple, avec l'extension EditThisCookie :\n"
-            "  1. va sur x.com en etant connecte a ton compte,\n"
-            "  2. clique sur l'icone EditThisCookie, puis sur Exporter,\n"
-            "  3. colle tout ici en brut. XWipe trouve auth_token et ct0 tout seul.\n\n"
-            "Marchent aussi : l'en-tete Cookie copie depuis les outils F12, ou juste "
-            "les deux valeurs auth_token et ct0 l'une sous l'autre.\n\n"
-            "Rien n'est envoye ailleurs : XWipe parle directement a x.com et garde "
-            "les cookies chiffres sur cette machine.")).pack(anchor="w", **pad)
+            "Marchent aussi : l'en-tete Cookie copie depuis les outils F12, ou les "
+            "deux valeurs auth_token et ct0 l'une sous l'autre. Rien n'est envoye "
+            "ailleurs : XWipe parle a x.com directement et garde les cookies "
+            "chiffres sur cette machine.")).pack(anchor="w", **pad)
 
-        self.text = scrolledtext.ScrolledText(self, height=10, bg="#12151b",
-                                              fg="#e6e8eb", insertbackground="#e6e8eb",
-                                              relief="flat", font=("Consolas", 9))
-        self.text.pack(fill="both", expand=True, pady=8, **pad)
+        wrap = tk.Frame(self, bg=C["line"])
+        wrap.pack(fill="both", expand=True, pady=SP["md"], **pad)
+        self.text = tk.Text(wrap, height=8, bg=C["sunken"], fg=C["text"],
+                            insertbackground=C["text"], relief="flat",
+                            font=(FF_MONO, 9), padx=SP["md"], pady=SP["sm"], wrap="none")
+        self.text.pack(fill="both", expand=True, padx=1, pady=1)
 
         self.msg = ttk.Label(self, text="", style="Muted.TLabel", wraplength=520,
                              justify="left")
         self.msg.pack(anchor="w", **pad)
 
         row = ttk.Frame(self)
-        row.pack(fill="x", pady=12, **pad)
+        row.pack(fill="x", pady=SP["lg"], **pad)
         self.btn_ok = ttk.Button(row, text="Verifier et importer",
                                  style="Accent.TButton", command=self._import)
         self.btn_ok.pack(side="right")
-        ttk.Button(row, text="Annuler", command=self.destroy).pack(side="right", padx=6)
+        ttk.Button(row, text="Annuler", style="Ghost.TButton",
+                   command=self.destroy).pack(side="right", padx=(0, SP["sm"]))
 
     def _import(self):
         raw = self.text.get("1.0", "end")
         try:
             auth, ct0 = acct.parse_credentials(raw)
         except acct.ImportError_ as ex:
-            self.msg.configure(text=str(ex), foreground="#f85149")
+            self.msg.configure(text=str(ex), foreground=C["danger"])
             return
         self.msg.configure(text="Verification de la session cote X...",
-                           foreground="#8b929c")
+                           foreground=C["muted"])
         self.btn_ok.configure(state="disabled")
 
         def job(_w):
@@ -563,7 +736,7 @@ class ImportDialog(tk.Toplevel):
                     self.destroy()
                     return
                 elif kind in ("auth", "error"):
-                    self.msg.configure(text=payload, foreground="#f85149")
+                    self.msg.configure(text=payload, foreground=C["danger"])
                     self.btn_ok.configure(state="normal")
                 elif kind == "done":
                     self.worker = None
