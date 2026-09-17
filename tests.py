@@ -120,12 +120,14 @@ def test_partition_method():
         {"id": "2", "kind": "reply", "source_id": None},
         {"id": "3", "kind": "retweet", "source_id": "900"},
         {"id": "4", "kind": "retweet", "source_id": None},  # orphelin
+        {"id": "5", "kind": "like", "source_id": None},
     ]
 
     class FakeClient:
         def __init__(self):
-            self.deleted, self.unrt = [], []
+            self.deleted, self.unrt, self.unliked = [], [], []
             self.alive = set()
+            self.liked = set()
 
         def set_stop_check(self, fn):
             pass
@@ -138,8 +140,15 @@ def test_partition_method():
             self.unrt.append(src)
             return True
 
+        def undo_like(self, tid):
+            self.unliked.append(tid)
+            return True
+
         def exists(self, tid):
             return tid in self.alive
+
+        def still_liked(self, tid):
+            return tid in self.liked
 
     fc = FakeClient()
 
@@ -159,8 +168,10 @@ def test_partition_method():
           set(fc.deleted) == {"1", "2"})
     check("retweet -> undo_retweet sur le SOURCE, jamais delete_tweet",
           fc.unrt == ["900"] and "3" not in fc.deleted)
+    check("like -> undo_like sur son id, jamais delete_tweet",
+          fc.unliked == ["5"] and "5" not in fc.deleted)
     check("retweet orphelin (sans source) compte en echec, pas en succes",
-          res.failed == 1 and res.deleted == 3)
+          res.failed == 1 and res.deleted == 4)
     # temoin : un tweet encore vivant apres coup est retente puis compte en echec
     fc2 = FakeClient()
     fc2.alive = {"1"}  # X pretend l'avoir supprime mais il reste
@@ -169,6 +180,14 @@ def test_partition_method():
         [{"id": "1", "kind": "tweet", "source_id": None}], delay=0, verify=True)
     check("temoin: 200 menteur -> element retente puis marque en echec",
           res2.failed == 1 and res2.deleted == 0)
+    # temoin like : la verif passe par still_liked, pas exists (le tweet reste)
+    fc3 = FakeClient()
+    fc3.liked = {"5"}  # le like resiste au retrait
+    eng3 = Engine(fc3, "42", FakeStore())
+    res3 = eng3.delete_selection(
+        [{"id": "5", "kind": "like", "source_id": None}], delay=0, verify=True)
+    check("temoin: like non retire (still_liked) -> echec, pas faux succes",
+          res3.failed == 1 and res3.deleted == 0 and fc3.unliked == ["5", "5"])
 
 
 def test_shred_archives():

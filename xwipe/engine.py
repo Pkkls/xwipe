@@ -126,6 +126,7 @@ CATEGORIES = [
     ("tweet", "Tweets"),
     ("reply", "Reponses"),
     ("retweet", "Retweets"),
+    ("like", "Likes"),
 ]
 
 
@@ -151,13 +152,35 @@ class Engine:
 
         records = self.client.scan(self.rest_id, progress=on_page)
         path = self.store.write_archive(records)
-        counts = {"tweet": 0, "reply": 0, "retweet": 0}
+        counts = {"tweet": 0, "reply": 0, "retweet": 0, "like": 0}
         for r in records:
             counts[r["kind"]] = counts.get(r["kind"], 0) + 1
-        self.log("Trouve : %d tweets, %d reponses, %d retweets"
-                 % (counts["tweet"], counts["reply"], counts["retweet"]), "ok")
+        self.log("Trouve : %d tweets, %d reponses, %d retweets, %d likes"
+                 % (counts["tweet"], counts["reply"], counts["retweet"],
+                    counts["like"]), "ok")
         self.log("Sauvegarde locale : %s" % os.path.basename(path), "info")
         return records
+
+    def _remove(self, rec: dict) -> None:
+        """Applique la bonne operation selon le type. Un retweet se defait sur le
+        tweet source, un like par UnfavoriteTweet, le reste par DeleteTweet."""
+        kind = rec.get("kind")
+        if kind == "retweet":
+            src = rec.get("source_id")
+            if not src:
+                raise XError("retweet sans tweet source, impossible a defaire")
+            self.client.undo_retweet(src)
+        elif kind == "like":
+            self.client.undo_like(rec["id"])
+        else:
+            self.client.delete_tweet(rec["id"])
+
+    def _still_there(self, rec: dict):
+        """True si l'element n'a pas ete retire, False sinon, None indetermine.
+        Un like n'est pas 'supprime' (le tweet reste), on regarde `favorited`."""
+        if rec.get("kind") == "like":
+            return self.client.still_liked(rec["id"])
+        return self.client.exists(rec["id"])
 
     def delete_selection(self, selection: list[dict], *, delay: float = 1.2,
                          verify: bool = True) -> Result:
@@ -189,13 +212,7 @@ class Engine:
                 self.progress("delete", i, total, "deja fait")
                 continue
             try:
-                if rec.get("kind") == "retweet":
-                    src = rec.get("source_id")
-                    if not src:
-                        raise XError("retweet sans tweet source, impossible a defaire")
-                    self.client.undo_retweet(src)
-                else:
-                    self.client.delete_tweet(key)
+                self._remove(rec)
                 done[key] = "ok"
                 touched.append(rec)
                 res.deleted += 1
@@ -226,7 +243,7 @@ class Engine:
         for i, rec in enumerate(touched, 1):
             if self.should_stop():
                 break
-            alive = self.client.exists(rec["id"])
+            alive = self._still_there(rec)
             if alive is None:
                 res.unverified += 1
             elif alive:
@@ -245,12 +262,9 @@ class Engine:
             if self.should_stop():
                 break
             try:
-                if rec.get("kind") == "retweet" and rec.get("source_id"):
-                    self.client.undo_retweet(rec["source_id"])
-                else:
-                    self.client.delete_tweet(rec["id"])
+                self._remove(rec)
                 time.sleep(delay)
-                if self.client.exists(rec["id"]):
+                if self._still_there(rec):
                     still.append(rec)
             except XError:
                 still.append(rec)

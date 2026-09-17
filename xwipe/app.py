@@ -189,7 +189,7 @@ class App(tk.Tk):
         head = ttk.Frame(self, padding=(SP["xl"], SP["lg"], SP["xl"], SP["md"]))
         head.pack(fill="x")
         ttk.Label(head, text="XWipe", style="Title.TLabel").pack(side="left")
-        ttk.Label(head, text="  supprime tes tweets, reponses et retweets sur X",
+        ttk.Label(head, text="  supprime tes tweets, reponses, retweets et likes sur X",
                   style="Muted.TLabel").pack(side="left", pady=(6, 0))
 
         # -- Barre compte : la 1re etape, action primaire a droite ------------
@@ -424,7 +424,7 @@ class App(tk.Tk):
                 self.empty_glyph.configure(text="⟳")
                 self.empty_title.configure(text="Compte pret a lire")
                 self.empty_sub.configure(
-                    text="Clique Lire le compte pour charger tweets, reponses et retweets.")
+                    text="Clique Lire le compte pour charger tweets, reponses, retweets et likes.")
             else:
                 self.empty_glyph.configure(text=CHECK_OFF)
                 self.empty_title.configure(text="Aucun compte")
@@ -442,8 +442,8 @@ class App(tk.Tk):
             if not self.cat_vars.get(rec["kind"], tk.BooleanVar(value=True)).get():
                 continue
             on = rec["id"] in self.checked
-            kind = {"tweet": "Tweet", "reply": "Reponse",
-                    "retweet": "Retweet"}.get(rec["kind"], rec["kind"])
+            kind = {"tweet": "Tweet", "reply": "Reponse", "retweet": "Retweet",
+                    "like": "Like"}.get(rec["kind"], rec["kind"])
             date = (rec.get("created_at") or "")[:16]
             text = (rec.get("text") or "").replace("\n", " ")
             if len(text) > 120:
@@ -544,17 +544,18 @@ class App(tk.Tk):
         if not self.current or self.worker or not self.checked:
             return
         sel = [r for r in self.records if r["id"] in self.checked]
-        by = {"tweet": 0, "reply": 0, "retweet": 0}
+        by = {"tweet": 0, "reply": 0, "retweet": 0, "like": 0}
         for r in sel:
             by[r["kind"]] = by.get(r["kind"], 0) + 1
         if not messagebox.askyesno(
                 "Confirmer la suppression",
-                "Supprimer definitivement %d element(s) sur @%s ?\n\n"
-                "  %d tweet(s), %d reponse(s), %d retweet(s)\n\n"
-                "X ne permet aucun retour en arriere. Une sauvegarde locale a ete "
+                "Supprimer %d element(s) sur @%s ?\n\n"
+                "  %d tweet(s), %d reponse(s), %d retweet(s), %d like(s)\n\n"
+                "Tweets et reponses sont supprimes, retweets et likes sont retires. "
+                "X ne permet aucun retour en arriere ; une sauvegarde locale a ete "
                 "ecrite lors de la lecture." % (
                     len(sel), self.current.get("screen_name") or "?",
-                    by["tweet"], by["reply"], by["retweet"]),
+                    by["tweet"], by["reply"], by["retweet"], by["like"]),
                 icon="warning", default="no"):
             return
         self._busy(True)

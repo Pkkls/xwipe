@@ -13,7 +13,7 @@ VSVersionInfo(
     StringFileInfo([
       StringTable("040c04b0", [
         StringStruct("CompanyName", "XWipe"),
-        StringStruct("FileDescription", "XWipe - supprime tes tweets, reponses et retweets"),
+        StringStruct("FileDescription", "XWipe - supprime tes tweets, reponses, retweets et likes"),
         StringStruct("FileVersion", "1.0.0"),
         StringStruct("InternalName", "XWipe"),
         StringStruct("OriginalFilename", "XWipe.exe"),

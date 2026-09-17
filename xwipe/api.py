@@ -334,7 +334,28 @@ class XClient:
                     return found
         return None
 
-    def _walk(self, instructions, owner_id: str, seen: dict, source: str) -> str | None:
+    def _classify_like(self, res: dict | None) -> dict | None:
+        """Un like porte sur le tweet de QUELQU'UN D'AUTRE : pas de filtre owner.
+        L'id retenu est celui du tweet aime (ce que prend UnfavoriteTweet)."""
+        tw = self._unwrap(res)
+        if not tw or tw.get("__typename") == "TweetTombstone":
+            return None
+        lg = tw.get("legacy") or {}
+        rid = tw.get("rest_id") or lg.get("id_str")
+        if not rid:
+            return None
+        author = (((tw.get("core") or {}).get("user_results") or {}).get("result") or {})
+        handle = ((author.get("core") or {}).get("screen_name")
+                  or (author.get("legacy") or {}).get("screen_name"))
+        return {
+            "id": rid, "kind": "like", "source_id": None,
+            "created_at": lg.get("created_at"), "text": lg.get("full_text", "") or "",
+            "reply_to": handle,  # auteur du tweet aime, pour le contexte
+            "likes": lg.get("favorite_count"), "retweets": lg.get("retweet_count"),
+        }
+
+    def _walk(self, instructions, owner_id: str, seen: dict, source: str,
+              *, like_mode: bool = False) -> str | None:
         bottom = None
         for ins in instructions or []:
             entries = list(ins.get("entries") or [])
@@ -357,7 +378,7 @@ class XClient:
                         if ic.get("itemType") == "TimelineTweet" and ic.get("tweet_results"):
                             results.append(ic["tweet_results"].get("result"))
                 for r in results:
-                    rec = self._classify(r, owner_id)
+                    rec = self._classify_like(r) if like_mode else self._classify(r, owner_id)
                     if not rec:
                         continue
                     prev = seen.get(rec["id"])
@@ -369,54 +390,70 @@ class XClient:
                     seen[rec["id"]] = rec
         return bottom
 
+    def _paginate(self, op_name: str, base_vars: dict, owner_id: str, seen: dict,
+                  label: str, *, like_mode: bool = False, max_pages: int = 400,
+                  page_delay: float = 1.2, progress=None) -> None:
+        """Pagine une timeline jusqu'au bout (le curseur Bottom ne bouge plus,
+        ou plus aucun element neuf). C'est ce qui fait remonter jusqu'a la
+        creation du compte, page apres page."""
+        try:
+            self.op(op_name)
+        except XError as ex:
+            self._log("%s indisponible: %s" % (op_name, ex), "warn")
+            return
+        cursor, page = None, 0
+        while True:
+            if self._should_stop():
+                break
+            page += 1
+            variables = dict(base_vars)
+            if cursor:
+                variables["cursor"] = cursor
+            try:
+                data = self.gql_get(op_name, variables)
+            except AuthError:
+                raise
+            except XError as ex:
+                self._log("%s page %d: %s" % (op_name, page, ex), "warn")
+                break
+            before = len(seen)
+            bottom = self._walk(self._find_instructions(data), owner_id, seen, label,
+                                like_mode=like_mode)
+            added = len(seen) - before
+            if progress:
+                progress(label, page, added, len(seen))
+            if added == 0 or not bottom or bottom == cursor:
+                break
+            cursor = bottom
+            if page >= max_pages:
+                self._log("garde-fou: %d pages sur %s" % (max_pages, op_name), "warn")
+                break
+            time.sleep(page_delay)
+
     def scan(self, owner_id: str, *, page_delay: float = 1.2,
              max_pages: int = 400, progress=None) -> list[dict]:
-        """Inventaire complet du compte.
+        """Inventaire complet du compte, jusqu'a sa creation.
 
-        Quatre timelines sont interrogees puis fusionnees par id : aucune ne
-        contient tout a elle seule, et un meme tweet peut apparaitre dans
-        plusieurs.
+        Chaque source est paginee jusqu'au bout puis fusionnee par id : les
+        timelines de contenu possede (tweets, reponses, retweets) et la timeline
+        des Likes, qui portent sur des tweets d'autrui et se retirent par
+        UnfavoriteTweet. X plafonne l'historique profil (~3200 posts) : au-dela
+        de ce plafond cote serveur, aucun client ne peut remonter plus loin.
         """
         seen: dict[str, dict] = {}
+        owned = {"userId": owner_id, "count": 100, "includePromotedContent": False,
+                 "withCommunity": True, "withVoice": True, "withV2Timeline": True}
         for op_name, label in TIMELINES:
             if self._should_stop():
                 break
-            try:
-                self.op(op_name)
-            except XError as ex:
-                self._log("%s indisponible: %s" % (op_name, ex), "warn")
-                continue
-            cursor, page = None, 0
-            while True:
-                if self._should_stop():
-                    break
-                page += 1
-                variables = {
-                    "userId": owner_id, "count": 100,
-                    "includePromotedContent": False, "withCommunity": True,
-                    "withVoice": True, "withV2Timeline": True,
-                }
-                if cursor:
-                    variables["cursor"] = cursor
-                try:
-                    data = self.gql_get(op_name, variables)
-                except AuthError:
-                    raise
-                except XError as ex:
-                    self._log("%s page %d: %s" % (op_name, page, ex), "warn")
-                    break
-                before = len(seen)
-                bottom = self._walk(self._find_instructions(data), owner_id, seen, label)
-                added = len(seen) - before
-                if progress:
-                    progress(label, page, added, len(seen))
-                if added == 0 or not bottom or bottom == cursor:
-                    break
-                cursor = bottom
-                if page >= max_pages:
-                    self._log("garde-fou: %d pages sur %s" % (max_pages, op_name), "warn")
-                    break
-                time.sleep(page_delay)
+            self._paginate(op_name, owned, owner_id, seen, label,
+                           max_pages=max_pages, page_delay=page_delay, progress=progress)
+        if not self._should_stop():
+            likes = {"userId": owner_id, "count": 100, "includePromotedContent": False,
+                     "withClientEventToken": False, "withVoice": True,
+                     "withV2Timeline": True}
+            self._paginate("Likes", likes, owner_id, seen, "like", like_mode=True,
+                           max_pages=max_pages, page_delay=page_delay, progress=progress)
         out = list(seen.values())
         out.sort(key=lambda r: int(r["id"]), reverse=True)
         return out
@@ -437,12 +474,13 @@ class XClient:
                             {"source_tweet_id": source_tweet_id, "dark_request": False})
         return "unretweet" in json.dumps(res.get("data", {})).lower() or bool(res.get("data"))
 
-    def exists(self, tweet_id: str) -> bool | None:
-        """True encore en ligne, False disparu, None indetermine.
+    def undo_like(self, tweet_id: str) -> bool:
+        """Retire un like (UnfavoriteTweet sur le tweet aime). Ne supprime pas le
+        tweet, qui appartient a autrui : on defait seulement la relation."""
+        res = self.gql_post("UnfavoriteTweet", {"tweet_id": tweet_id})
+        return "unfavorite" in json.dumps(res.get("data", {})).lower() or bool(res.get("data"))
 
-        C'est le seul temoin fiable d'une suppression : les timelines servent un
-        index retarde et continuent d'afficher des tweets deja morts.
-        """
+    def _tweet_result(self, tweet_id: str) -> dict | None:
         try:
             data = self.gql_get("TweetResultByRestId", {
                 "tweetId": tweet_id, "withCommunity": False,
@@ -452,10 +490,32 @@ class XClient:
             raise
         except XError:
             return None
-        res = ((data.get("data") or {}).get("tweetResult") or {}).get("result") or {}
+        return ((data.get("data") or {}).get("tweetResult") or {}).get("result") or {}
+
+    def exists(self, tweet_id: str) -> bool | None:
+        """True encore en ligne, False disparu, None indetermine.
+
+        C'est le seul temoin fiable d'une suppression : les timelines servent un
+        index retarde et continuent d'afficher des tweets deja morts.
+        """
+        res = self._tweet_result(tweet_id)
+        if res is None:
+            return None
         tn = res.get("__typename")
         if not tn:
             return False
         if tn in ("TweetTombstone", "TweetUnavailable"):
             return False
         return True
+
+    def still_liked(self, tweet_id: str) -> bool | None:
+        """True si le tweet est encore aime, False sinon, None indetermine.
+
+        Pour un like, `exists` ne dit rien : le tweet reste en ligne. C'est la
+        relation `favorited` du viewer qui doit passer a faux.
+        """
+        res = self._tweet_result(tweet_id)
+        if res is None:
+            return None
+        res = self._unwrap(res) or res
+        return bool((res.get("legacy") or {}).get("favorited"))
