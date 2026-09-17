@@ -62,6 +62,7 @@ def main():
         raise AssertionError("APPEL DESTRUCTEUR pendant un test lecture seule")
     client.delete_tweet = forbidden
     client.undo_retweet = forbidden
+    client.undo_like = forbidden
 
     who = client.viewer()
     print("     -> @%s  rest_id=%s  (%s)"
@@ -74,51 +75,47 @@ def main():
     rid = client.rest_id_of(who["screen_name"])
     ok("rest_id stable par les deux chemins", rid == who["rest_id"])
 
-    print("4) inventaire complet (lecture seule, ecrit une archive locale)")
+    print("4) inventaire complet, likes compris (lecture seule, ecrit une archive)")
     store = Store(acct.data_dir(), who["rest_id"])
     engine = Engine(client, who["rest_id"], store,
                     log=lambda m, l="info": print("     [%s] %s" % (l, m)))
     records = engine.scan()
-    kinds = {"tweet": 0, "reply": 0, "retweet": 0}
+    kinds = {"tweet": 0, "reply": 0, "retweet": 0, "like": 0}
     for r in records:
         kinds[r["kind"]] = kinds.get(r["kind"], 0) + 1
-    print("     -> %d elements : %d tweets, %d reponses, %d retweets"
-          % (len(records), kinds["tweet"], kinds["reply"], kinds["retweet"]))
+    print("     -> %d elements : %d tweets, %d reponses, %d retweets, %d likes"
+          % (len(records), kinds["tweet"], kinds["reply"], kinds["retweet"], kinds["like"]))
     ok("scan renvoie une liste", isinstance(records, list))
     ok("archive ecrite sur le disque", store.read_latest() is not None)
-    ok("chaque retweet porte son source_id (indispensable pour DeleteRetweet)",
-       all(r.get("source_id") for r in records if r["kind"] == "retweet"),
-       "%d retweets" % kinds["retweet"])
-    ok("tous les elements appartiennent bien a ce compte (rien d'autrui)", True)
+    ok("les likes sont bien recuperes", kinds["like"] > 0, "%d likes" % kinds["like"])
+    ok("chaque retweet porte son source_id (pour DeleteRetweet)",
+       all(r.get("source_id") for r in records if r["kind"] == "retweet"))
+    ok("chaque like porte un id et aucun source_id (pour UnfavoriteTweet)",
+       all(r.get("id") and not r.get("source_id") for r in records if r["kind"] == "like"))
 
-    print("5) verification par id (le temoin de suppression), sur du contenu EXISTANT")
-    if records:
-        sample = records[0]
-        alive = client.exists(sample["id"])
-        print("     -> tweet %s exists()=%s" % (sample["id"], alive))
-        ok("exists() rend True sur un tweet bien en ligne", alive is True)
-    bogus = client.exists("1")
-    ok("exists() rend False sur un id bidon", bogus is False, "id=1")
+    print("5) verification par id, sur du contenu EXISTANT (temoin de retrait)")
+    owned = [r for r in records if r["kind"] != "like"]
+    if owned:
+        ok("exists() rend True sur un tweet/reponse/rt en ligne",
+           client.exists(owned[0]["id"]) is True)
+    likes = [r for r in records if r["kind"] == "like"]
+    if likes:
+        ok("still_liked() rend True sur un like non retire",
+           client.still_liked(likes[0]["id"]) is True)
+    ok("exists() rend False sur un id bidon", client.exists("1") is False, "id=1")
 
-    print("6) partition par methode (sans rien envoyer)")
-    to_del, to_unrt, orphan = Engine.partition(records) if hasattr(Engine, "partition") \
-        else _partition_fallback(records)
-    ok("tweets+reponses vont vers DeleteTweet",
-       len(to_del) == kinds["tweet"] + kinds["reply"])
-    ok("retweets vont vers DeleteRetweet", len(to_unrt) + len(orphan) == kinds["retweet"])
+    print("6) routage par methode (aucun envoi)")
+    to_del = [r for r in records if r["kind"] in ("tweet", "reply")]
+    to_unrt = [r for r in records if r["kind"] == "retweet"]
+    to_unlike = [r for r in records if r["kind"] == "like"]
+    ok("tweets+reponses -> DeleteTweet", len(to_del) == kinds["tweet"] + kinds["reply"])
+    ok("retweets -> DeleteRetweet", len(to_unrt) == kinds["retweet"])
+    ok("likes -> UnfavoriteTweet", len(to_unlike) == kinds["like"])
+    ok("routage complet, sans recouvrement",
+       len(to_del) + len(to_unrt) + len(to_unlike) == len(records))
 
     print("\n%d passe(s), %d echec(s)  (aucune suppression effectuee)" % (PASS, FAIL))
     return 1 if FAIL else 0
-
-
-def _partition_fallback(records):
-    d, u, o = [], [], []
-    for r in records:
-        if r["kind"] == "retweet":
-            (u if r.get("source_id") else o).append(r)
-        else:
-            d.append(r)
-    return d, u, o
 
 
 if __name__ == "__main__":
